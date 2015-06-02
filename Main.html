@@ -1,0 +1,262 @@
+<html>
+
+<script id="vertex-shader" type="x-shader/x-vertex">
+
+precision mediump float;
+
+attribute  vec4 vPosition;
+//attribute  vec4 vColor;
+attribute vec4 vNormal;
+attribute  vec2 vTexCoord;
+
+varying vec2 fTexCoord;
+varying vec4 fPosition;
+varying vec4 fNormal;
+varying mat4 Camera;
+varying vec4 fShadowPosition;
+
+uniform float uShadowRun;
+uniform mat4 uCameraMVMatrix;
+uniform mat4 uObjectMVMatrix;
+uniform mat4 uPMatrix;
+uniform mat4 LightSourceTransform;
+
+
+void main()
+{
+	//Indicates the Shadow Run
+	if(uShadowRun==1.0)
+	{
+		Camera=LightSourceTransform;
+		gl_Position = uPMatrix * Camera * uObjectMVMatrix * vPosition;		
+	}
+	else
+	{
+		Camera=uCameraMVMatrix;
+	
+
+	// Interpolates texture coordinates across the surface's fragments
+	fTexCoord = vTexCoord;
+	
+	// Position is multiplied by the model view matrix and projection matrix.
+    gl_Position = uPMatrix * Camera * uObjectMVMatrix * vPosition;
+	
+	// Interpolate position and normal to fragment shader
+	fPosition = vPosition;
+	fNormal = vNormal;
+	
+	const mat4 depthScaleMatrix = mat4(0.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.5, 0.5, 0.5, 1.0); //transforms into tex coords
+	fShadowPosition =  depthScaleMatrix*uPMatrix * LightSourceTransform * uObjectMVMatrix * vPosition;
+	}
+}
+</script>
+
+<script id="fragment-shader" type="x-shader/x-fragment">
+
+precision mediump float;
+
+//varying vec4 fColor;
+varying vec2 fTexCoord;
+//varying vec3 N, L, E, D;
+uniform sampler2D texture;
+uniform sampler2D ShadowMap;
+uniform sampler2D ShadowMap2;
+//varying float ViewAngle;
+
+varying vec4 fPosition;
+varying vec4 fNormal;
+varying mat4 Camera;
+varying vec4 fShadowPosition;
+
+uniform vec4 LightSourceVertices;
+uniform float LightSourceIntensity;
+uniform float uShadowRun;
+
+uniform mat4 uCameraMVMatrix;
+uniform mat4 uObjectMVMatrix;
+
+uniform float CloseToFire;
+uniform int noShading;
+uniform vec4 specularVec4Multiplier;
+uniform float FlashlightOn;
+
+void
+main()
+{
+	if(uShadowRun == 1.0)
+		gl_FragColor= vec4(gl_FragCoord.z);
+	else if ( noShading == 1 )
+		gl_FragColor = texture2D( texture, fTexCoord );
+	else
+	{
+	vec4 phongColor;
+	//gl_FragColor = vec4( 1,0,0,1 );
+	gl_FragColor = texture2D( texture, fTexCoord );
+	
+	// Moved this code from the vertex shader to here:
+	vec3 pos = (Camera * uObjectMVMatrix*fPosition).xyz; // changed "vPosition" to fPosition
+	vec3 D =(vec4(0.0,0.0,0.0,1.0)).xyz - pos; 
+	
+    vec3 L = normalize( (vec4(0.0,0.0,0.0,1.0)).xyz - pos );		//light vector
+    vec3 E = -normalize( pos );										//eye vector
+    vec3 H = normalize( L + E );								//half angle vector
+
+    // Transform vertex normal into eye coordinates
+	vec4 Normal = fNormal; // changed "vNormal" to fNormal
+	Normal.a=0.0;
+    vec3 N = normalize( (Camera*uObjectMVMatrix*Normal).xyz);
+	
+	//Material Stuff
+	vec4 materialAmbient = gl_FragColor;
+	vec4 materialDiffuse = gl_FragColor;
+	vec4 materialSpecular = vec4(0.5,0.5,0.5,1);
+	float shininess = 100.0;
+	
+	//Lighting for points
+
+	vec4 Light = Camera*LightSourceVertices;
+	vec3 D2 =(Light).xyz - pos; //distance from light source
+	vec3 L2 = normalize( (Light).xyz - pos );		//light vector
+    vec3 H2 = normalize( L2 + E );					//half angle vector
+	
+	float distance = D2[0]*D2[0]+D2[1]*D2[1]+D2[2]*D2[2];
+	distance =LightSourceIntensity/distance;
+	if(distance>1.0)
+	distance = 1.0;
+	
+	float Kd2 = max( dot(L2, N), 0.0 );
+	float Ks2 = pow( max(dot(N, H2), 0.0), shininess );
+    vec4 diffuse2 = Kd2*vec4(1.0,1.0,1.0,1.0)*materialDiffuse*distance;
+	vec4 specular2 = Ks2*specularVec4Multiplier*materialSpecular;
+	if( dot(L2, N) < 0.0 ) {
+	specular2 = vec4(0.0, 0.0, 0.0, 1.0);
+	}
+	
+	//lighting for flashlight
+	float ViewAngle= D[0]*D[0]+D[1]*D[1];
+	if(ViewAngle<25.0)
+		ViewAngle = 1.0;
+	else
+		ViewAngle=20.0/ViewAngle;//ViewAngle=100.0/ViewAngle;
+	
+	
+	//vec3 H = normalize( L + E ); // already calculated above
+	
+	
+	float Kd = max( dot(L, N), 0.0 );
+	float Ks = pow( max(dot(N, H), 0.0), shininess );
+	vec4 ambient = vec4(0.04,0.04,0.04,1.0)*materialAmbient;
+    vec4 diffuse = Kd*vec4(1.0,1.0,1.0,1.0)*materialDiffuse*ViewAngle;
+	vec4 specular = Ks*specularVec4Multiplier*materialSpecular;
+	if( dot(L, N) < 0.0 ) {
+	specular = vec4(0.0, 0.0, 0.0, 1.0);
+    } 
+	
+	
+	
+	//Shadows
+	vec3 depth = (fShadowPosition.xyz / fShadowPosition.w);
+	float shadowValue=0.0;
+	if(CloseToFire==1.0)
+    shadowValue = texture2D(ShadowMap2, depth.xy).r;
+	else
+	shadowValue = texture2D(ShadowMap, depth.xy).r;
+	
+    depth.z *= 0.999;
+    if(shadowValue*0.99915 < depth.z && depth.x<1.0&& depth.y<1.0&& depth.x>0.0&& depth.y>0.0 &&depth.z>0.0&&depth.z<1.0) { shadowValue= 0.0; }
+	else if(fShadowPosition.y<0.0&& fShadowPosition.z<0.0 && fShadowPosition.y+1.9*fShadowPosition.z<-12.0&& CloseToFire!=1.0) //only for guillotine room
+	shadowValue=0.0;
+	else if((fShadowPosition.x<0.0|| depth.x>1.0) && fShadowPosition.z>24.0 && CloseToFire==1.0) //only for fireplace
+	shadowValue=0.0;
+    else
+	shadowValue =1.0;
+	
+	
+	phongColor =  ambient+(diffuse+specular)*FlashlightOn+(diffuse2+specular2)*shadowValue;
+
+    phongColor.a = 1.0;
+	gl_FragColor = phongColor;
+	}
+		
+	
+	
+}
+</script>
+
+<script type="text/javascript" src="JavaScriptFiles/webgl-utils.js"></script>
+<script type="text/javascript" src="JavaScriptFiles/initShaders.js"></script>
+<script type="text/javascript" src="JavaScriptFiles/MV.js"></script>
+<script type="text/javascript" src="JavaScriptFiles/Briley.js"></script>
+<script type="text/javascript" src="JavaScriptFiles/BrileyColDetect.js"></script>
+<script type="text/javascript" src="JavaScriptFiles/BrileyWestWing.js"></script>
+<script type="text/javascript" src="JavaScriptFiles/table.js"></script>
+<script type="text/javascript" src="JavaScriptFiles/chair.js"></script>
+<script type="text/javascript" src="JavaScriptFiles/painting.js"></script>
+<script type="text/javascript" src="JavaScriptFiles/overlay.js"></script>
+<script type="text/javascript" src="JavaScriptFiles/Erik.js"></script>
+<script type="text/javascript" src="JavaScriptFiles/Sphere.js"></script>
+<script type="text/javascript" src="JavaScriptFiles/BrileyHUD.js"></script>
+<script type="text/javascript" src="JavaScriptFiles/JoeSouthWing.js"></script>
+<script type="text/javascript" src="JavaScriptFiles/North.js"></script>
+<script type="text/javascript" src="JavaScriptFiles/flashlight.js"></script>
+<script type="text/javascript" src="JavaScriptFiles/noose.js"></script>
+<script type="text/javascript" src="JavaScriptFiles/lightning.js"></script>
+<script type="text/javascript" src="JavaScriptFiles/Main.js"></script>
+
+
+<body>
+<canvas id="gl-canvas" width="960"" height="540">
+Oops ... your browser doesn't support the HTML5 canvas element
+</canvas>
+
+<img id = "woodwall" src = "Textures/woodwall.png" hidden></img>
+<img id = "woodfloor" src = "Textures/woodfloor.png" hidden></img>
+<img id = "wooddoor" src = "Textures/wooddoor.png" hidden></img>
+<img id = "stones" src = "Textures/stones.png" hidden></img>
+<img id = "marble" src = "Textures/marble.jpg" hidden></img>
+<img id = "metal" src = "Textures/metal.jpg" hidden></img>
+<img id = "frame" src = "Textures/painting_frame.png" hidden></img>
+<img id = "clown" src = "Textures/painting.jpg" hidden></img>
+<img id = "skull" src = "Textures/skull.jpg" hidden></img>
+<img id = "zombie" src = "Textures/zombie.jpg" hidden></img>
+<img id = "frame2" src = "Textures/frame2.png" hidden></img>
+<img id = "fire1" src = "Textures/fire1.png" hidden></img>
+<img id = "fire2" src = "Textures/fire2.png" hidden></img>
+<img id = "fireplace" src = "Textures/fireplace.png" hidden></img>
+<img id = "scaryface" src = "Textures/scaryface.jpg" hidden></img>
+<img id = "bloodywall" src = "Textures/bloodywall.png" hidden></img>
+<img id = "bloodywoodfloor" src = "Textures/bloodywoodfloor.png" hidden></img>
+<img id = "bloodystonefloor" src = "Textures/bloodystonefloor.png" hidden></img>
+<img id = "rug" src = "Textures/rug.jpg" hidden></img>
+<img id = "colorstones" src = "Textures/colorstones.png" hidden></img>
+<img id = "battery1" src = "Textures/battery1.png" hidden></img>
+<img id = "battery2" src = "Textures/battery2.png" hidden></img>
+<img id = "gold" src = "Textures/gold.png" hidden></img>
+<img id = "textover1" src = "Textures/text1.png" hidden></img>
+<img id = "lightwood" src = "Textures/lightwood.png" hidden></img>
+<img id = "gray" src = "Textures/gray.png" hidden></img>
+<img id = "eye" src = "Textures/eye.png" hidden></img>
+<img id = "yellow" src = "Textures/yellow.png" hidden></img>
+<img id = "red" src = "Textures/red.png" hidden></img>
+<img id = "plate" src = "Textures/plate.png" hidden></img>
+<img id = "bookshelf" src = "Textures/bookshelf.png" hidden></img>
+<img id = "metalWithEye" src = "Textures/metalWithEye.png" hidden></img>
+<img id = "jump" src = "Textures/jump.jpg" hidden></img>
+<img id = "creeperface" src = "Textures/creeperface.png" hidden></img>
+<img id = "creeperskin" src = "Textures/creeperskin.png" hidden></img>
+<img id = "drawers" src = "Textures/drawers.png" hidden></img>
+<img id = "nightstand" src = "Textures/nightstand.gif" hidden></img>
+<img id = "mattress" src = "Textures/mattress.jpg" hidden></img>
+<img id = "cloth" src = "Textures/cloth.jpg" hidden></img>
+<img id = "bloodywoodwall" src = "Textures/bloodywallbedroom.png" hidden></img>
+<img id = "rope" src = "Textures/rope.png" hidden></img>
+<img id = "lightning1" src = "Textures/lightning1.png" hidden></img>
+<img id = "doubledoors" src = "Textures/doubledoors.png" hidden></img>
+<img id = "darkgray" src = "Textures/darkgray.png" hidden></img>
+<img id = "smiley" src = "Textures/smiley.png" hidden></img>
+<img id = "youwin" src = "Textures/youwin.png" hidden></img>
+<img id = "youlose" src = "Textures/youlose.png" hidden></img>
+
+
+</body>
+</html>
