@@ -143,7 +143,10 @@ window.onload = function init()
 	// Make all textures:
 	// makeTexture is from Briley.js.
 	// It places the textures into an array, associating the strings as names for them.
-	makeTexture( "woodwall", document.getElementById("woodwall") );
+	var img=document.getElementById("woodwall");
+	img.crossOrigin="anonymous";
+	img.src="http://rawgit.com/pchez/k3ys/gh-pages/Textures/woodwall.png";
+	makeTexture( "woodwall", img);
 	makeTexture( "woodfloor", document.getElementById("woodfloor") );
 	makeTexture( "wooddoor", document.getElementById("wooddoor") );
 	makeTexture( "stones", document.getElementById("stones") );
